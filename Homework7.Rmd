@@ -1,0 +1,118 @@
+---
+title: "Homework 7"
+output: html_document
+author: "Matt Wyczalkowski <m.wyczalkowski@wustl.edu>"
+---
+
+References:
+http://r-statistics.co/Top50-Ggplot2-Visualizations-MasterList-R-Code.html
+
+Load the ggplot2 library
+```{r}
+library(ggplot2)
+```
+# Read in BRFSS data
+Get rid of all rows which have any missing values (NA)
+We add a random column to help with testing
+```{r}
+data.fn<-"dat/BRFSS.48K.csv"
+BRFSS<-read.csv(data.fn)
+BRFSS <- BRFSS[rowSums(is.na(BRFSS))==0,]
+my.levels=c(
+"No",
+"Yes",
+"pre/borderline",
+"Yes pregnancy",
+"Refused",
+"Unknown"
+)
+BRFSS$diabetes_short_label <- factor(BRFSS$diabetes_short_label, levels = my.levels)
+BRFSS$random = sample(1000, size = nrow(BRFSS), replace = TRUE)  # add a column of random numbers for testing
+print(head(BRFSS))
+```
+
+# Evaluate significant differences
+Based on this example: http://www.r-tutor.com/elementary-statistics/non-parametric-methods/mann-whitney-wilcoxon-test
+
+Is this the best test to use?
+
+## Stats on one pair
+For now, comparing "Yes" and "No".  `BRFSS.mw` is a subset of entire dataset with just two factors of diabetes: Yes and No
+
+```{r}
+BRFSS.mw = BRFSS[BRFSS$diabetes_short_label %in% c("Yes", "No"),]
+print(head(BRFSS.mw))
+```
+
+Perform statistics.  Seems to be very significant.
+```{r}
+results = wilcox.test(weight ~ diabetes_short_label, data=BRFSS.mw)
+print(results)
+print(results$p.value)
+```
+
+Convincing ourselves that calling wilcox test correctly by testing correlation with random number.  There is no correlation.
+```{r}
+results = wilcox.test(random ~ diabetes_short_label, data=BRFSS.mw)
+print(results$p.value)
+
+```
+
+# Plotting of all vs. all diabetes comparison
+
+We want to construct a new data frame which has the significance (p-value) between **pairs** of diabetes status values.  To help us do this, we create a function which subsets BRFSS given any pair of diabetes status values `a` and `b` and performs the wilcox test on these, returning the p.value.
+
+```{r}
+
+get.p.value = function(a, b) {
+  if (a==b) {
+    return(1)
+  }
+  BRFSS.mw = BRFSS[BRFSS$diabetes_short_label %in% c(a, b),]
+  results = wilcox.test(height ~ diabetes_short_label, data=BRFSS.mw)
+  return(results$p.value)
+}
+```
+
+Now call this function in a double loop.  Note that it would be more "elegant" to use one of the `apply` functions, but this does the trick.  We also evaluate the average weight for each diabetes status - these will define the vertical endpoints for the arcs we draw indicating significance.
+
+```{r}
+results = NULL
+for (A in levels(BRFSS$diabetes_short_label)) {
+  for (B in levels(BRFSS$diabetes_short_label)) {
+    p = get.p.value(A,B)
+    results = rbind(results, data.frame(A=A, B=B, p.value=p,
+                    mA=mean(BRFSS[BRFSS$diabetes_short_label==A,]$weight),
+                    mB=mean(BRFSS[BRFSS$diabetes_short_label==B,]$weight)))
+  }
+}
+```
+
+To help with the plotting, we create a column which indicates which status pairs are significant.  Since p values for A,B and B,A are the same and we don't want to plot them twice, we keep only one.  
+```{r}
+results$is.significant = results$p.value < 0.005
+results$A.lt.B = as.numeric(results$A) < as.numeric(results$B)
+results$to.plot = results$is.significant & results$A.lt.B
+results
+```
+
+Finally, we are ready to plot the `results` dataset on top of the previous violin plot (`p`). 
+Here's the violin plot:
+```{r}
+p <- ggplot(data=BRFSS)
+p <- p + geom_violin(aes(x=diabetes_short_label, y=weight, fill=diabetes_short_label), color=NA) + guides(fill=FALSE)
+p <- p + scale_fill_brewer(palette="Set1", name="Diabetes Status")
+p <- p + theme_bw() + xlab("Diabetes Status") + ylab("Weight [kg]")
+p <- p + theme(panel.grid.major.x = element_blank())
+p
+```
+
+Use `geom_curve` to draw arcs between all significant pairs.  Note that we replace the `data` of the above figure with `results`.
+
+```{r}
+p2 = p + geom_curve(data=results[results$to.plot,], aes(x=A,y=mA,xend=B, yend=mB), curvature=-0.5)
+p2 = p2 + ggtitle("Significance < 0.005 shown")
+p2
+```
+
+Ideas for additional plots - have the thickness of the line vary according to the degree of significance.
